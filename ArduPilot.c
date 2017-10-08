@@ -8,13 +8,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include "XPLMDisplay.h"
 #include "XPLMGraphics.h"
 #include "XPLMProcessing.h"
+#include "XPLMUtilities.h"
 
 static XPLMWindowID gWindow;
 
 static bool enabled;
+static bool use_pause;
 
 /*
   callback for window draw
@@ -43,6 +46,10 @@ static int MouseClickCallback(XPLMWindowID         inWindowID,
                               void *               inRefcon)
 {
         printf("******* got click ******\n");
+        if (inMouse == xplm_MouseDown) {
+            use_pause = !use_pause;
+            printf("use_pause=%u\n", (unsigned)use_pause);
+        }
         // accept click
 	return 1;
 }                                      
@@ -61,6 +68,13 @@ static float FlightLoopCallback(float                inElapsedSinceLastCall,
            (double)inElapsedTimeSinceLastFlightLoop,
            1.0/inElapsedSinceLastCall,
            inCounter);
+
+    if (use_pause) {
+        XPLMCommandKeyStroke(xplm_key_pause);
+        usleep(50000);
+        XPLMCommandKeyStroke(xplm_key_pause);
+    }
+        
     if (enabled) {
         // call on next loop
         return -1;
