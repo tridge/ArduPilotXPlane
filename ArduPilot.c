@@ -9,10 +9,12 @@
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <stdint.h>
 #include "XPLMDisplay.h"
 #include "XPLMGraphics.h"
 #include "XPLMProcessing.h"
 #include "XPLMUtilities.h"
+#include "XPLMDataAccess.h"
 
 static XPLMWindowID gWindow;
 
@@ -22,6 +24,66 @@ static char status_string[60] = "starting";
 static XPLMCreateFlightLoop_t flight_loop;
 static bool flight_loop_registered;
 static XPLMFlightLoopID flight_loop_id;
+static float frame_rate;
+
+// dref handles
+static struct {
+    float quaternion[4];
+    double latitude;
+    double longitude;
+} dref;
+
+// list of drefs matching name to handles
+static struct {
+    const char *name;
+    void *ptr;
+    unsigned type;
+    XPLMDataRef ref;
+} dref_map[] = {
+    { "sim/flightmodel/position/q", &dref.quaternion, xplmType_FloatArray },
+    { "sim/flightmodel/position/latitude", &dref.latitude, xplmType_Double },
+    { "sim/flightmodel/position/longitude", &dref.longitude, xplmType_Double },
+    { NULL, NULL }
+};
+
+
+/*
+  find all dref handles. This is done when the plugin is enabled. 
+ */
+static void find_data_refs(void)
+{
+    for (uint16_t i=0; dref_map[i].name; i++) {
+        dref_map[i].ref = XPLMFindDataRef(dref_map[i].name);
+        if (dref_map[i].ref == NULL) {
+            printf("Failed to find dref '%s'\n", dref_map[i].name);
+            snprintf(status_string, sizeof(status_string)-1, "failed ref %u", (unsigned)i);
+            continue;
+        }
+        if ((dref_map[i].type & XPLMGetDataRefTypes(dref_map[i].ref)) == 0) {
+            printf("Bad dref type '%s'\n", dref_map[i].name);
+            snprintf(status_string, sizeof(status_string)-1, "bad ref type %u", (unsigned)i);            
+        }
+    }
+}
+
+
+/*
+  fill all data ref values
+ */
+static void fill_data_refs(void)
+{
+    for (uint16_t i=0; dref_map[i].name; i++) {
+        switch (dref_map[i].type) {
+        case xplmType_FloatArray:
+            XPLMGetDatavf(dref_map[i].ref, dref_map[i].ptr, 0, 4);
+            break;
+        case xplmType_Double:
+            *((double *)dref_map[i].ptr) = XPLMGetDatad(dref_map[i].ref);
+            break;
+        }
+    }
+}
+
 
 /*
   callback for window draw
@@ -69,11 +131,20 @@ static float FlightLoopCallback(float                inElapsedSinceLastCall,
                                 int                  inCounter,    
                                 void *               inRefcon)
 {
-    printf("ArduPilot: loop %f %f rate=%.2f %d\n",
+    fill_data_refs();
+
+    frame_rate = 1.0 / inElapsedSinceLastCall;
+
+    snprintf(status_string, sizeof(status_string)-1, "%.1f fps", (double)frame_rate);
+    
+#if LIN
+    printf("ArduPilot: loop %f %f rate=%.2f %d (%f %f)\n",
            (double)inElapsedSinceLastCall,
            (double)inElapsedTimeSinceLastFlightLoop,
-           1.0/inElapsedSinceLastCall,
-           inCounter);
+           frame_rate,
+           inCounter,
+           dref.latitude, dref.longitude);
+#endif
 
     if (use_pause) {
         // pause the simulator
@@ -144,6 +215,9 @@ PLUGIN_API int XPluginEnable(void)
     enabled = true;
     printf("ArduPilot: enabled\n");
     if (!flight_loop_registered) {
+
+        find_data_refs();
+        
         flight_loop.structSize = sizeof(flight_loop);
         flight_loop.phase = xplm_FlightLoop_Phase_AfterFlightModel;
         flight_loop.callbackFunc = FlightLoopCallback;
@@ -166,6 +240,7 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID	inFromWho,
 
 
 #if IBM
+// we need a DllMain for windows
 #include <windows.h>
 BOOL APIENTRY DllMain( HANDLE hModule,
                        DWORD  ul_reason_for_call,
