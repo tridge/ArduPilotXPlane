@@ -18,6 +18,10 @@ static XPLMWindowID gWindow;
 
 static bool enabled;
 static bool use_pause;
+static char status_string[60] = "starting";
+static XPLMCreateFlightLoop_t flight_loop;
+static bool flight_loop_registered;
+static XPLMFlightLoopID flight_loop_id;
 
 /*
   callback for window draw
@@ -34,6 +38,7 @@ static void DrawWindowCallback(XPLMWindowID         inWindowID,
 
         // draw a message at the top
 	XPLMDrawString(color, left + 5, top - 20, "ArduPilot SITL", NULL, xplmFont_Basic);
+	XPLMDrawString(color, left + 5, top - 40, status_string, NULL, xplmFont_Basic);
 }                                   
 
 /*
@@ -49,6 +54,7 @@ static int MouseClickCallback(XPLMWindowID         inWindowID,
         if (inMouse == xplm_MouseDown) {
             use_pause = !use_pause;
             printf("use_pause=%u\n", (unsigned)use_pause);
+            snprintf(status_string, sizeof(status_string)-1, "use_pause=%u", (unsigned)use_pause);
         }
         // accept click
 	return 1;
@@ -70,8 +76,12 @@ static float FlightLoopCallback(float                inElapsedSinceLastCall,
            inCounter);
 
     if (use_pause) {
+        // pause the simulator
         XPLMCommandKeyStroke(xplm_key_pause);
-        usleep(50000);
+
+        // now we do network operations to ArduPilot
+
+        // unpause again
         XPLMCommandKeyStroke(xplm_key_pause);
     }
         
@@ -103,8 +113,6 @@ PLUGIN_API int XPluginStart(char *		outName,
                                    MouseClickCallback,
                                    NULL);						/* Refcon - not used. */
 					
-        // register our flight loop callback
-        XPLMRegisterFlightLoopCallback(FlightLoopCallback, -1, NULL);
 	return 1;
 }
 
@@ -121,6 +129,9 @@ PLUGIN_API void	XPluginStop(void)
  */
 PLUGIN_API void XPluginDisable(void)
 {
+    if (enabled) {
+        XPLMScheduleFlightLoop(flight_loop_id, 0, false);        
+    }
     enabled = false;
     printf("ArduPilot: disabled\n");
 }
@@ -132,6 +143,15 @@ PLUGIN_API int XPluginEnable(void)
 {
     enabled = true;
     printf("ArduPilot: enabled\n");
+    if (!flight_loop_registered) {
+        flight_loop.structSize = sizeof(flight_loop);
+        flight_loop.phase = xplm_FlightLoop_Phase_AfterFlightModel;
+        flight_loop.callbackFunc = FlightLoopCallback;
+        flight_loop.refcon = NULL;
+        flight_loop_registered = true;
+        flight_loop_id = XPLMCreateFlightLoop(&flight_loop);
+    }
+    XPLMScheduleFlightLoop(flight_loop_id, -1, false);
     return 1;
 }
 
@@ -144,3 +164,22 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID	inFromWho,
 {
 }
 
+
+#if IBM
+#include <windows.h>
+BOOL APIENTRY DllMain( HANDLE hModule,
+                       DWORD  ul_reason_for_call,
+                       LPVOID lpReserved
+                     )
+{
+    switch (ul_reason_for_call)
+    {
+        case DLL_PROCESS_ATTACH:
+        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_DETACH:
+        case DLL_PROCESS_DETACH:
+            break;
+    }
+    return TRUE;
+}
+#endif
